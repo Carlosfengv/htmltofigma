@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "HTML to Figma Inspector",
+  "version": "0.1.0",
+  "description": "Inspect and copy web elements into Figma redesign workflows.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "HTML to Figma"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["vendor/figma-capture.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/page-bridge.js", "vendor/figma-capture.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
