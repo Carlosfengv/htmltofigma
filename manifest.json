@@ -14,8 +14,11 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["vendor/figma-capture.js", "src/content.js"],
-      "run_at": "document_idle"
+      "js": ["vendor/figma-capture.js", "src/custom-action-bar.js", "src/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "web_accessible_resources": [

@@ -7,11 +7,16 @@
   window.__HTML_TO_FIGMA_CONTENT_READY__ = true;
 
   const MESSAGE_TOGGLE = "HTML_TO_FIGMA_TOGGLE";
+  const MESSAGE_SET_ENABLED = "HTML_TO_FIGMA_SET_ENABLED";
+  const MESSAGE_GET_TAB_STATE = "HTML_TO_FIGMA_GET_TAB_STATE";
   const CAPTURE_URL = "https://mcp.figma.com/mcp/html-to-design/capture.js";
   const CAPTURE_LOCAL_URL = chrome.runtime.getURL("vendor/figma-capture.js");
   const CAPTURE_SELECTOR_ATTR = "data-h2f-capture-target";
   const BRIDGE_SCRIPT_ID = "__html_to_figma_page_bridge__";
   const ROOT_ID = "__html_to_figma_overlay_root__";
+  const ACTION_BAR_ROOT_ID = "__html_to_figma_action_bar__";
+  const OFFICIAL_TOOLBAR_HOST_ID = "__figma_capture_toolbar_host__";
+  const OFFICIAL_TOOLBAR_HIDE_STYLE_ID = "__h2f_hide_official_toolbar__";
   const DISALLOWED_TAGS = new Set([
     "SCRIPT",
     "STYLE",
@@ -69,10 +74,12 @@
       this.statusMessage = "Idle";
       this.statusTimeout = null;
       this.toastTimeout = null;
+      this.actionBarResetTimer = null;
       this.pointerX = 0;
       this.pointerY = 0;
       this.bridgeReady = false;
       this.requestCounter = 0;
+      this.actionBar = null;
 
       this.overlayRoot = null;
       this.overlayShadow = null;
@@ -92,10 +99,15 @@
     }
 
     toggle() {
-      if (this.enabled) {
-        this.disable();
-      } else {
+      this.setEnabled(!this.enabled);
+      return { enabled: this.enabled };
+    }
+
+    setEnabled(nextEnabled) {
+      if (nextEnabled) {
         this.enable();
+      } else {
+        this.disable();
       }
       return { enabled: this.enabled };
     }
@@ -110,7 +122,9 @@
       this.lastEscTapAt = 0;
       this.mountOverlay();
       this.attachEvents();
+      this.setOfficialToolbarHidden(true);
       this.setStatus("Capture mode on", 1400);
+      this.showDefaultActionBar();
       this.updateUi();
       this.scheduleRender();
       this.prewarmCapturePipeline();
@@ -132,6 +146,9 @@
       this.unmountOverlay();
       this.clearStatusTimer();
       this.clearToastTimer();
+      this.setOfficialToolbarHidden(false);
+      this.clearActionBarTimer();
+      this.unmountActionBar();
     }
 
     attachEvents() {
@@ -282,10 +299,10 @@
           text-transform: uppercase;
           margin-bottom: 8px;
         }
-          hr {
+        hr {
           border-color: rgba(255, 255, 255, 0.11);
           margin: 12px 0;
-          }
+        }
         .row {
           font-size: 13px;
           line-height: 1.7;
@@ -294,11 +311,11 @@
           display: flex;
           justify-content: space-between;
         }
-        .container{
+        .container {
           list-style: none;
           padding-left: 0;
           margin: 0 0 8px 0;
-          }
+        }
         .key {
           display: inline-block;
           background: rgba(255, 255, 255, 0.17);
@@ -327,30 +344,60 @@
       this.toastEl.innerHTML = `<span class="toast-spinner" aria-hidden="true"></span><span class="toast-text"></span>`;
       this.toastTextEl = this.toastEl.querySelector(".toast-text");
 
-      const toolbar = document.createElement("div");
-      toolbar.id = "toolbar";
-      toolbar.innerHTML = `
-        <div id="title">HTML to Figma</div>
-        <hr/>
-        <ul class='container'>
-          <li class="row">Copy element <span class='key'>Click</span></li>
-          <li class="row">Copy Multiple <span class='key'>⇧ Shift</span></li>
-          <li class="row">Select parent <span class='key'>Esc</span></li>
-          <li class="row">Exit inspector <span class='key'>Double Esc</span></li>
-          <li class="row">Toggle inspect <span class='key'>Double ⌘ Cmd</span></li>
-        </ul>
-      `;
+      let toolbar = null;
+      if (this.isTopFrame()) {
+        toolbar = document.createElement("div");
+        toolbar.id = "toolbar";
+        toolbar.innerHTML = `
+          <div id="title">HTML to Figma</div>
+          <hr/>
+          <ul class='container'>
+            <li class="row">Copy element <span class='key'>Click</span></li>
+            <li class="row">Copy Multiple <span class='key'>⇧ Shift</span></li>
+            <li class="row">Select parent <span class='key'>Esc</span></li>
+            <li class="row">Exit inspector <span class='key'>Double Esc</span></li>
+            <li class="row">Toggle inspect <span class='key'>Double ⌘ Cmd</span></li>
+          </ul>
+        `;
+      }
 
       layer.appendChild(this.flexBox);
       layer.appendChild(this.hoverBox);
       layer.appendChild(this.selectedLayer);
       layer.appendChild(this.cursorBadge);
       layer.appendChild(this.toastEl);
-      layer.appendChild(toolbar);
+      if (toolbar) {
+        layer.appendChild(toolbar);
+      }
       this.overlayShadow.appendChild(style);
       this.overlayShadow.appendChild(layer);
 
       document.documentElement.appendChild(this.overlayRoot);
+    }
+
+    setOfficialToolbarHidden(hidden) {
+      const existing = document.getElementById(OFFICIAL_TOOLBAR_HIDE_STYLE_ID);
+      if (hidden) {
+        if (existing) {
+          return;
+        }
+        const style = document.createElement("style");
+        style.id = OFFICIAL_TOOLBAR_HIDE_STYLE_ID;
+        style.textContent = `
+          #${OFFICIAL_TOOLBAR_HOST_ID} {
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+          }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+        return;
+      }
+
+      if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
+      }
     }
 
     unmountOverlay() {
@@ -468,8 +515,11 @@
             this.hoverElement = null;
             this.flexElement = null;
             this.updateCursorPosition(false);
+            this.clearActionBarTimer();
+            this.unmountActionBar();
             this.setStatus("Inspector paused", 1100);
           } else {
+            this.showDefaultActionBar();
             this.setStatus("Inspector resumed", 1100);
           }
 
@@ -567,12 +617,19 @@
         return null;
       }
 
+      if (this.isActionBarElement(start)) {
+        return null;
+      }
+
       if (this.overlayRoot && this.overlayRoot.contains(start)) {
         return null;
       }
 
       let node = start;
       while (node) {
+        if (this.isActionBarElement(node)) {
+          return null;
+        }
         if (this.overlayRoot && this.overlayRoot.contains(node)) {
           return null;
         }
@@ -583,6 +640,17 @@
       }
 
       return null;
+    }
+
+    isActionBarElement(element) {
+      if (!(element instanceof Element)) {
+        return false;
+      }
+      const actionBarHost = document.getElementById(ACTION_BAR_ROOT_ID);
+      if (!actionBarHost) {
+        return false;
+      }
+      return element === actionBarHost || actionBarHost.contains(element);
     }
 
     isSelectable(element) {
@@ -770,6 +838,138 @@
       this.cursorBadge.textContent = this.shiftDown ? `${activeType} multi` : activeType;
     }
 
+    isTopFrame() {
+      try {
+        return window.top === window;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    ensureActionBar() {
+      if (!this.isTopFrame()) {
+        return null;
+      }
+      if (this.actionBar) {
+        return this.actionBar;
+      }
+      if (typeof window.HtmlToFigmaActionBar !== "function") {
+        return null;
+      }
+      this.actionBar = new window.HtmlToFigmaActionBar();
+      return this.actionBar;
+    }
+
+    unmountActionBar() {
+      if (this.actionBar) {
+        this.actionBar.unmount();
+        this.actionBar = null;
+      }
+    }
+
+    clearActionBarTimer() {
+      if (this.actionBarResetTimer) {
+        window.clearTimeout(this.actionBarResetTimer);
+        this.actionBarResetTimer = null;
+      }
+    }
+
+    showDefaultActionBar() {
+      const bar = this.ensureActionBar();
+      if (!bar) {
+        return;
+      }
+      this.clearActionBarTimer();
+      bar.setState({
+        variant: "main",
+        icon: null,
+        message: "Send to Figma",
+        minWidth: 490,
+        actions: [
+          {
+            icon: "capture",
+            label: "Capture page",
+            onClick: () => this.captureWholePage(),
+          },
+          {
+            icon: "select",
+            label: "Select element",
+            onClick: () => this.focusSelectMode(),
+          },
+        ],
+      });
+    }
+
+    showLoadingActionBar(message) {
+      const bar = this.ensureActionBar();
+      if (!bar) {
+        return;
+      }
+      this.clearActionBarTimer();
+      bar.setState({
+        icon: "spinner",
+        message: message || "Capturing...",
+        minWidth: 265,
+        actions: [],
+      });
+    }
+
+    showSuccessActionBar(message) {
+      const bar = this.ensureActionBar();
+      if (!bar) {
+        return;
+      }
+      this.clearActionBarTimer();
+      bar.setState({
+        icon: "ok",
+        message,
+        minWidth: 265,
+        actions: [],
+      });
+      this.actionBarResetTimer = window.setTimeout(() => {
+        if (this.enabled) {
+          this.showDefaultActionBar();
+        }
+      }, 1800);
+    }
+
+    showErrorActionBar(message) {
+      const bar = this.ensureActionBar();
+      if (!bar) {
+        return;
+      }
+      this.clearActionBarTimer();
+      bar.setState({
+        icon: "error",
+        message: message || "Capture failed",
+        minWidth: 265,
+        actions: [],
+      });
+      this.actionBarResetTimer = window.setTimeout(() => {
+        if (this.enabled) {
+          this.showDefaultActionBar();
+        }
+      }, 2200);
+    }
+
+    focusSelectMode() {
+      this.inspectPaused = false;
+      this.setStatus("Select element mode", 1000);
+      this.showDefaultActionBar();
+    }
+
+    captureWholePage() {
+      if (this.copyInFlight) {
+        return;
+      }
+      this.inspectPaused = true;
+      this.clearSelections();
+      this.hoverElement = document.body;
+      this.flexElement = this.findFlexAncestor(document.body);
+      this.scheduleRender();
+      this.copyElements([document.body]);
+    }
+
     classifyElement(element) {
       if (!(element instanceof Element)) {
         return "layout";
@@ -835,6 +1035,7 @@
       this.setStatus("Copying...", 0);
       this.updateUi();
       this.showLoadingToast("Translating HTML to Figma layers");
+      this.showLoadingActionBar("Translating HTML to Figma layers");
 
       const capturePlan = this.createCapturePlan(elements);
       const payload = this.buildPayload(elements, capturePlan);
@@ -845,20 +1046,26 @@
         this.releaseCapturePlan(capturePlan, cleanupDelay);
         this.setStatus(`Copied ${elements.length} to Figma`, 1800);
         this.showToast(this.buildCopiedToastText(elements.length), 1800);
+        this.showSuccessActionBar(this.buildCopiedToastText(elements.length));
       } catch (error) {
         this.releaseCapturePlan(capturePlan, 0);
         try {
           await this.copyPayloadToClipboard(payload);
           this.setStatus(`Fallback copy (${elements.length})`, 2200);
           this.showToast(this.buildCopiedToastText(elements.length), 2200);
+          this.showSuccessActionBar(this.buildCopiedToastText(elements.length));
           console.warn("html-to-figma: capture.js unavailable, used clipboard fallback", error);
         } catch (clipboardError) {
           this.setStatus("Copy failed", 2200);
           this.showToast("Copy failed", 2200);
+          this.showErrorActionBar("Copy failed");
           console.error("html-to-figma: clipboard fallback failed", clipboardError);
         }
       } finally {
         this.copyInFlight = false;
+        if (this.enabled) {
+          this.inspectPaused = false;
+        }
         if (!this.shiftDown) {
           this.clearSelections();
         }
@@ -1407,10 +1614,31 @@
   const inspector = new HtmlToFigmaInspector();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || message.type !== MESSAGE_TOGGLE) {
+    if (!message || typeof message !== "object") {
       return;
     }
-    const state = inspector.toggle();
-    sendResponse(state);
+
+    if (message.type === MESSAGE_SET_ENABLED) {
+      const state = inspector.setEnabled(Boolean(message.enabled));
+      sendResponse(state);
+      return;
+    }
+
+    if (message.type === MESSAGE_TOGGLE) {
+      const state = inspector.toggle();
+      sendResponse(state);
+    }
   });
+
+  function syncInitialEnabledState() {
+    chrome.runtime.sendMessage({ type: MESSAGE_GET_TAB_STATE }, (response) => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
+      const shouldEnable = Boolean(response && response.enabled);
+      inspector.setEnabled(shouldEnable);
+    });
+  }
+
+  syncInitialEnabledState();
 })();
