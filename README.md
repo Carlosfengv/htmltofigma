@@ -36,7 +36,7 @@
 1. 打开 `chrome://extensions`
 2. 开启 `Developer mode`
 3. 点击 `Load unpacked`
-4. 选择目录 `/Users/carlos/Downloads/HtmltoFigma`
+4. 选择目录 `/HtmltoFigma`
 5. 打开任意网页，点击插件图标启动
 
 ## 常见提示
