@@ -78,6 +78,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === MESSAGE_SET_ENABLED) {
+    const tabId = sender.tab && sender.tab.id;
+    if (!tabId) {
+      sendResponse({ enabled: false });
+      return;
+    }
+
+    const nextEnabled = Boolean(message.enabled);
+    setTabEnabled(tabId, nextEnabled)
+      .then(() => {
+        broadcastEnabledState(tabId, nextEnabled);
+        sendResponse({ enabled: nextEnabled });
+      })
+      .catch(() => sendResponse({ enabled: false }));
+    return true;
+  }
+
   if (message.type === MESSAGE_TOGGLE) {
     const tabId = sender.tab && sender.tab.id;
     if (!tabId) {

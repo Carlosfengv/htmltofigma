@@ -124,7 +124,6 @@
       this.attachEvents();
       this.setOfficialToolbarHidden(true);
       this.setStatus("Capture mode on", 1400);
-      this.showDefaultActionBar();
       this.updateUi();
       this.scheduleRender();
       this.prewarmCapturePipeline();
@@ -519,7 +518,6 @@
             this.unmountActionBar();
             this.setStatus("Inspector paused", 1100);
           } else {
-            this.showDefaultActionBar();
             this.setStatus("Inspector resumed", 1100);
           }
 
@@ -541,6 +539,7 @@
         const now = Date.now();
         if (this.lastEscTapAt > 0 && now - this.lastEscTapAt <= DOUBLE_ESC_TAP_MS) {
           this.lastEscTapAt = 0;
+          this.syncEnabledStateToBackground(false);
           this.disable();
           return;
         }
@@ -582,6 +581,17 @@
       if (isCopyShortcut && this.selectedElements.size > 0) {
         event.preventDefault();
         this.copyElements(Array.from(this.selectedElements));
+      }
+    }
+
+    syncEnabledStateToBackground(enabled) {
+      try {
+        chrome.runtime.sendMessage({
+          type: MESSAGE_SET_ENABLED,
+          enabled: Boolean(enabled),
+        });
+      } catch (_error) {
+        // Ignore messaging failures; local state is still updated.
       }
     }
 
@@ -928,7 +938,7 @@
       });
       this.actionBarResetTimer = window.setTimeout(() => {
         if (this.enabled) {
-          this.showDefaultActionBar();
+          this.unmountActionBar();
         }
       }, 1800);
     }
@@ -947,7 +957,7 @@
       });
       this.actionBarResetTimer = window.setTimeout(() => {
         if (this.enabled) {
-          this.showDefaultActionBar();
+          this.unmountActionBar();
         }
       }, 2200);
     }
@@ -955,7 +965,8 @@
     focusSelectMode() {
       this.inspectPaused = false;
       this.setStatus("Select element mode", 1000);
-      this.showDefaultActionBar();
+      this.clearActionBarTimer();
+      this.unmountActionBar();
     }
 
     captureWholePage() {
@@ -1058,7 +1069,8 @@
         } catch (clipboardError) {
           this.setStatus("Copy failed", 2200);
           this.showToast("Copy failed", 2200);
-          this.showErrorActionBar("Copy failed");
+          this.clearActionBarTimer();
+          this.unmountActionBar();
           console.error("html-to-figma: clipboard fallback failed", clipboardError);
         }
       } finally {
