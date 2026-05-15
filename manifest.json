@@ -3,7 +3,7 @@
   "name": "HTML to Figma Inspector",
   "version": "0.1.0",
   "description": "Inspect and copy web elements into Figma redesign workflows.",
-  "permissions": ["activeTab", "scripting", "storage"],
+  "permissions": ["activeTab", "scripting", "storage", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background.js"

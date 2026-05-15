@@ -19,6 +19,51 @@
   let captureScriptPromise = null;
   let captureScriptSource = "";
 
+  function copyTextViaExecCommand(text) {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-9999px";
+    textArea.style.top = "-9999px";
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand("copy");
+    textArea.remove();
+  }
+
+  function ensureClipboardCompat() {
+    const clipboard = navigator && navigator.clipboard ? navigator.clipboard : null;
+    const writeText =
+      clipboard && typeof clipboard.writeText === "function"
+        ? clipboard.writeText.bind(clipboard)
+        : (text) => {
+            copyTextViaExecCommand(String(text));
+            return Promise.resolve();
+          };
+
+    const compatClipboard = {
+      ...(clipboard || {}),
+      writeText,
+    };
+
+    if (typeof compatClipboard.write !== "function") {
+      compatClipboard.write = async () => {
+        throw new Error("Clipboard.write unsupported in this context");
+      };
+    }
+
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+      try {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: compatClipboard,
+        });
+      } catch (error) {
+        console.warn("html-to-figma: page bridge cannot patch navigator.clipboard", error);
+      }
+    }
+  }
+
   function loadScript(url, scriptId) {
     if (!url) {
       return Promise.reject(new Error("Missing capture script url"));
@@ -148,6 +193,7 @@
       window.figma.useHtmlClipboardEncoding = payload.useHtmlClipboardEncoding !== false;
     }
 
+    ensureClipboardCompat();
     const options = normalizeCaptureOptions(payload);
     const capturePromise = Promise.resolve(capture(options));
     const ack = await awaitCaptureAck(capturePromise, payload.ackTimeoutMs);

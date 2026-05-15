@@ -1059,13 +1059,34 @@
         this.showToast(this.buildCopiedToastText(elements.length), 1800);
         this.showSuccessActionBar(this.buildCopiedToastText(elements.length));
       } catch (error) {
+        if (this.shouldRetryPlainClipboardCapture(error, capturePlan.request)) {
+          try {
+            const compatibleRequest = this.withHtmlClipboardEncoding(capturePlan.request, false);
+            const retryResult = await this.captureViaOfficialCapture(compatibleRequest);
+            const retryCleanupDelay =
+              retryResult && retryResult.pending ? capturePlan.cleanupDelayMs : 0;
+            this.releaseCapturePlan(capturePlan, retryCleanupDelay);
+            this.setStatus(`Copied ${elements.length} to Figma`, 1800);
+            this.showToast(this.buildCopiedToastText(elements.length), 1800);
+            this.showSuccessActionBar(this.buildCopiedToastText(elements.length));
+            console.warn(
+              "html-to-figma: HTML clipboard encoding unsupported, used plain clipboard mode",
+              error
+            );
+            return;
+          } catch (retryError) {
+            console.warn("html-to-figma: compatibility retry failed", retryError);
+          }
+        }
+
         this.releaseCapturePlan(capturePlan, 0);
         try {
           await this.copyPayloadToClipboard(payload);
-          this.setStatus(`Fallback copy (${elements.length})`, 2200);
-          this.showToast(this.buildCopiedToastText(elements.length), 2200);
-          this.showSuccessActionBar(this.buildCopiedToastText(elements.length));
-          console.warn("html-to-figma: capture.js unavailable, used clipboard fallback", error);
+          const fallbackMessage = "Copied debug payload only (Figma paste unavailable)";
+          this.setStatus("Capture failed, copied debug payload", 2600);
+          this.showToast(fallbackMessage, 2600);
+          this.showSuccessActionBar(fallbackMessage);
+          console.warn("html-to-figma: capture failed, used payload clipboard fallback", error);
         } catch (clipboardError) {
           this.setStatus("Copy failed", 2200);
           this.showToast("Copy failed", 2200);
@@ -1318,6 +1339,7 @@
           !payload || payload.useHtmlClipboardEncoding !== false;
         window.figma.useHtmlClipboardEncoding = useHtmlClipboardEncoding;
       }
+      this.ensureClipboardCompat();
       const options = this.normalizeCaptureOptions(payload);
       const capturePromise = Promise.resolve(capture(options));
       const ack = await this.awaitCaptureAck(capturePromise, payload.ackTimeoutMs);
@@ -1419,6 +1441,66 @@
         return error.message;
       }
       return String(error);
+    }
+
+    copyTextViaExecCommand(text) {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      textArea.style.top = "-9999px";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      textArea.remove();
+    }
+
+    ensureClipboardCompat() {
+      const clipboard = navigator && navigator.clipboard ? navigator.clipboard : null;
+      const writeText =
+        clipboard && typeof clipboard.writeText === "function"
+          ? clipboard.writeText.bind(clipboard)
+          : (text) => {
+              this.copyTextViaExecCommand(String(text));
+              return Promise.resolve();
+            };
+
+      const compatClipboard = {
+        ...(clipboard || {}),
+        writeText,
+      };
+
+      if (typeof compatClipboard.write !== "function") {
+        compatClipboard.write = async () => {
+          throw new Error("Clipboard.write unsupported in this context");
+        };
+      }
+
+      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+        try {
+          Object.defineProperty(navigator, "clipboard", {
+            configurable: true,
+            value: compatClipboard,
+          });
+        } catch (error) {
+          console.warn("html-to-figma: unable to patch navigator.clipboard", error);
+        }
+      }
+    }
+
+    withHtmlClipboardEncoding(payload, enabled) {
+      return {
+        ...(payload || {}),
+        useHtmlClipboardEncoding: Boolean(enabled),
+      };
+    }
+
+    shouldRetryPlainClipboardCapture(error, payload) {
+      if (payload && payload.useHtmlClipboardEncoding === false) {
+        return false;
+      }
+      const message = this.getErrorMessage(error).toLowerCase();
+      return message.includes("clipboarditem is not defined");
     }
 
     ensurePageBridge() {
